@@ -6,10 +6,11 @@ from aiogram.filters import CommandStart, StateFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+import datetime
 
 
 
-bot = Bot(token = "secret xD")
+bot = Bot(token = "7415493039:AAGJiWpEFmJDHUBRrayDsQb4Lk8SWewo5jo")
 API = "2ce80ab55efff7d78fc31f1868ec0dcf"
 
 dp = Dispatcher()
@@ -32,7 +33,7 @@ kb_weather = ReplyKeyboardMarkup(
             KeyboardButton(text="Узнать какой сейчас прогноз погоды")
         ],
         [
-            KeyboardButton(text="Узнать погоду на ближайшие 4 дня")
+            KeyboardButton(text="Узнать погоду на 5 дней")
         ],
     ],
     resize_keyboard=True, input_field_placeholder="Выберите нужный вариант"
@@ -97,7 +98,7 @@ async def weather_choise(message: types.Message, state: FSMContext):
 
     await message.answer(f"Вы выбрали город: {your_city}")
     await state.update_data(city_name=your_city)
-    await message.answer("Выберите необходимое действие", reply_markup=kb_weather)
+    await message.answer("Выберите необходимое действие\nПримечание! Прогноз погоды на 5 дней выдаётся по 3 часа", reply_markup=kb_weather)
     await state.set_state(AddWeather.weather_choise)
 
 @dp.message(AddWeather.weather_choise, F.text == "Узнать какой сейчас прогноз погоды")
@@ -122,6 +123,47 @@ async def weather_now(message: types.Message, state: FSMContext):
         data = await state.get_data()  # Пример использования данных из состояния
     finally:
         await state.clear()
+
+
+@dp.message(AddWeather.weather_choise, F.text == "Узнать погоду на 5 дней")
+async def weather_5_days(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    your_city = data.get("city_name")
+
+    try:
+        now = requests.get(f"https://api.openweathermap.org/data/2.5/forecast?q={your_city}&appid={API}&units=metric",
+                           timeout=10)  # Таймаут 10 секунд
+        now.raise_for_status()  # Проверка на наличие ошибок HTTP
+        json_data = now.json()
+
+        if json_data.get("cod") != "200":
+            await message.answer(f"Ошибка: {json_data.get('message', 'Неизвестная ошибка')}")  # Сообщение об ошибке
+            return
+
+        five_days_weather = []
+        formatted_string = "Погода на 5 дней:\n"
+        for item in json_data["list"]:
+            dt_value = item["dt"]
+            readable_time = datetime.datetime.utcfromtimestamp(dt_value).strftime('%d-%m-%Y %H:%M:%S')
+            day_of_week = datetime.datetime.utcfromtimestamp(dt_value).strftime('%A')
+            temperature = item['main']['temp']
+            daily_weather = [day_of_week, readable_time, "Температура:", temperature, "°C"]
+            five_days_weather.append(daily_weather)
+
+        for daily_weather in five_days_weather:
+            formatted_string += ' '.join(map(str, daily_weather)) + "\n"
+        await message.answer(formatted_string, reply_markup=kb_start)
+
+    except requests.exceptions.Timeout:
+        await message.answer("Запрос к серверу превысил время ожидания. Попробуйте позже.")
+    except requests.exceptions.RequestException as e:
+        await message.answer(f"Произошла ошибка при выполнении запроса: {e}")
+    else:
+        # Этот блок выполняется только в случае успешного завершения блока try
+        await state.update_data(weather_choise=message.text)  # Сохранение выбора в состоянии
+    finally:
+        await state.clear()
+
 
 async def main():
     await dp.start_polling(bot)
