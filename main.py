@@ -6,11 +6,10 @@ from aiogram.filters import CommandStart, StateFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-import datetime
+from datetime import datetime, timedelta
 
 
-
-bot = Bot(token = "7415493039:AAGJiWpEFmJDHUBRrayDsQb4Lk8SWewo5jo")
+bot = Bot(token = "")
 API = "2ce80ab55efff7d78fc31f1868ec0dcf"
 
 dp = Dispatcher()
@@ -30,9 +29,11 @@ kb_start = ReplyKeyboardMarkup(
 kb_weather = ReplyKeyboardMarkup(
     keyboard=[
         [
-            KeyboardButton(text="Узнать какой сейчас прогноз погоды")
+            KeyboardButton(text="Узнать какой сейчас прогноз погоды"),
+            KeyboardButton(text="Получить более подробный прогноз погоды на сегодня")
         ],
         [
+            KeyboardButton(text="Узнать погоду на завтра"),
             KeyboardButton(text="Узнать погоду на 5 дней")
         ],
     ],
@@ -98,8 +99,10 @@ async def weather_choise(message: types.Message, state: FSMContext):
 
     await message.answer(f"Вы выбрали город: {your_city}")
     await state.update_data(city_name=your_city)
-    await message.answer("Выберите необходимое действие\nПримечание! Прогноз погоды на 5 дней выдаётся по 3 часа", reply_markup=kb_weather)
+    await message.answer("Выберите необходимое действие\nПримечание! Прогноз погоды на 5 дней выдаётся по 3 часа\nПодробный прогноз на сегодня выдаётся также на каждые 3 часа", reply_markup=kb_weather)
     await state.set_state(AddWeather.weather_choise)
+
+weather_dictionary = {'Clouds': '☁️', 'Rain': '🌧️', 'Clear': '☀️', 'Snow': '❄️', 'Fog': '🌫️'}
 
 @dp.message(AddWeather.weather_choise, F.text == "Узнать какой сейчас прогноз погоды")
 async def weather_now(message: types.Message, state: FSMContext):
@@ -109,9 +112,17 @@ async def weather_now(message: types.Message, state: FSMContext):
     try:
         now = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q={your_city}&appid={API}&units=metric", timeout=10)  # Таймаут 10 секунд
         now.raise_for_status()  # Проверка на наличие ошибок HTTP
-
         json_data = now.json()
-        await message.answer(f"Погода сейчас: {json_data['main']['temp']}°C", reply_markup=kb_start)
+        temperature = json_data['main']['temp']
+        weather_description = json_data['weather'][0]['main']
+        emoji = ''
+
+        if weather_description in weather_dictionary:
+            emoji = weather_dictionary[weather_description]
+        else:
+            emoji = weather_description
+
+        await message.answer(f"Погода сейчас: {temperature}°C {emoji}.", reply_markup=kb_start)
 
     except requests.exceptions.Timeout:
         await message.answer("Запрос к серверу превысил время ожидания. Попробуйте позже.")
@@ -124,6 +135,94 @@ async def weather_now(message: types.Message, state: FSMContext):
     finally:
         await state.clear()
 
+@dp.message(AddWeather.weather_choise, F.text == "Получить более подробный прогноз погоды на сегодня")
+async def weather_now_in_detail(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    your_city = data.get("city_name")
+
+    try:
+        today_now = requests.get(f"https://api.openweathermap.org/data/2.5/forecast?q={your_city}&appid={API}&units=metric", timeout=10)  # Таймаут 10 секунд
+        today_now.raise_for_status()  # Проверка на наличие ошибок HTTP
+
+        json_data = today_now.json()
+        today = datetime.now()
+        day_of_week_today = today.strftime('%A')
+
+        today_weather = []
+        formatted_string = "Погода подробно на сегодня:\n"
+        for item in json_data["list"]:
+            dt_value = item["dt"]
+            readable_time = datetime.utcfromtimestamp(dt_value).strftime('%d-%m-%Y %H:%M:%S')
+            day_of_week = datetime.utcfromtimestamp(dt_value).strftime('%A')
+            temperature = item['main']['temp']
+            weather_description = item['weather'][0]['main']
+            emoji = ''
+            if weather_description in weather_dictionary:
+                emoji = weather_dictionary[weather_description]
+            else:
+                emoji = weather_description
+            if day_of_week == day_of_week_today:
+                daily_weather = [day_of_week, readable_time, "Температура:", temperature, "°C", emoji]
+                today_weather.append(daily_weather)
+            else:
+                break
+        for daily_weather in today_weather:
+            formatted_string += ' '.join(map(str, daily_weather)) + "\n"
+        await message.answer(formatted_string, reply_markup=kb_start)
+
+    except requests.exceptions.Timeout:
+        await message.answer("Запрос к серверу превысил время ожидания. Попробуйте позже.")
+    except requests.exceptions.RequestException as e:
+        await message.answer(f"Произошла ошибка при выполнении запроса: {e}")
+    else:
+        # Этот блок выполняется только в случае успешного завершения блока try
+        await state.update_data(weather_choise=message.text)  # Сохранение выбора в состоянии
+    finally:
+        await state.clear()
+
+
+@dp.message(AddWeather.weather_choise, F.text == "Узнать погоду на завтра")
+async def weather_tomorrow(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    your_city = data.get("city_name")
+
+    try:
+        tomorrow_now = requests.get(
+            f"https://api.openweathermap.org/data/2.5/forecast?q={your_city}&appid={API}&units=metric", timeout=10)
+        tomorrow_now.raise_for_status()
+        json_data = tomorrow_now.json()
+        today = datetime.now()
+        tomorrow = today + timedelta(days=1)
+        tomorrow_weather = []
+        formatted_string = "Погода подробно на завтра:\n"
+
+        for item in json_data["list"]:
+            dt_value = item["dt"]
+            if tomorrow.date() == datetime.utcfromtimestamp(dt_value).date():
+                readable_time = datetime.utcfromtimestamp(dt_value).strftime('%d-%m-%Y %H:%M:%S')
+                day_of_week = datetime.utcfromtimestamp(dt_value).strftime('%A')
+                temperature = item['main']['temp']
+                weather_description = item['weather'][0]['main']
+                emoji = ''
+                if weather_description in weather_dictionary:
+                    emoji = weather_dictionary[weather_description]
+                else:
+                    emoji = weather_description
+                daily_weather = [day_of_week, readable_time, "Температура:", temperature, "°C", emoji]
+                tomorrow_weather.append(daily_weather)
+
+        for daily_weather in tomorrow_weather:
+            formatted_string += ' '.join(map(str, daily_weather)) + "\n"
+        await message.answer(formatted_string, reply_markup=kb_start)
+
+    except requests.exceptions.Timeout:
+        await message.answer("Запрос к серверу превысил время ожидания. Попробуйте позже.")
+    except requests.exceptions.RequestException as e:
+        await message.answer(f"Произошла ошибка при выполнении запроса: {e}")
+    else:
+        await state.update_data(weather_choise=message.text)
+    finally:
+        await state.clear()
 
 @dp.message(AddWeather.weather_choise, F.text == "Узнать погоду на 5 дней")
 async def weather_5_days(message: types.Message, state: FSMContext):
@@ -144,10 +243,16 @@ async def weather_5_days(message: types.Message, state: FSMContext):
         formatted_string = "Погода на 5 дней:\n"
         for item in json_data["list"]:
             dt_value = item["dt"]
-            readable_time = datetime.datetime.utcfromtimestamp(dt_value).strftime('%d-%m-%Y %H:%M:%S')
-            day_of_week = datetime.datetime.utcfromtimestamp(dt_value).strftime('%A')
+            readable_time = datetime.utcfromtimestamp(dt_value).strftime('%d-%m-%Y %H:%M:%S')
+            day_of_week = datetime.utcfromtimestamp(dt_value).strftime('%A')
             temperature = item['main']['temp']
-            daily_weather = [day_of_week, readable_time, "Температура:", temperature, "°C"]
+            weather_description = item['weather'][0]['main']
+            emoji = ''
+            if weather_description in weather_dictionary:
+                emoji = weather_dictionary[weather_description]
+            else:
+                emoji = weather_description
+            daily_weather = [day_of_week, readable_time, "Температура:", temperature, "°C", emoji]
             five_days_weather.append(daily_weather)
 
         for daily_weather in five_days_weather:
